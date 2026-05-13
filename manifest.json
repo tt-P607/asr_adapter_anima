@@ -1,6 +1,6 @@
 {
     "name": "asr_adapter",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "本机麦克风实时语音识别适配器，通过 registry 消费外部 ASR provider",
     "author": "MoFox Team",
     "dependencies": {
