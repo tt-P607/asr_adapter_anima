@@ -1,8 +1,10 @@
 {
     "name": "asr_adapter",
-    "version": "1.0.1",
+    "version": "1.0.0",
     "description": "本机麦克风实时语音识别适配器，通过 registry 消费外部 ASR provider",
     "author": "MoFox Team",
+    "categories": ["chat"],
+    "tags": ["asr", "adapter", "real-time", "speech recognition"],
     "dependencies": {
         "plugins": [],
         "components": []
@@ -20,7 +22,7 @@
         }
     ],
     "entry_point": "plugin.py",
-    "min_core_version": "1.0.0",
+    "min_core_version": "1.2.0",
     "python_dependencies": [
         "sounddevice>=0.5.0",
         "numpy>=2.0.0",
