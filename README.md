@@ -3,6 +3,21 @@
 > [!IMPORTANT]
 > **关键依赖声明**：本插件是言柒针对 `tt-P607/anima_chatter` 定制的专用版本。如果您要使用言柒版本的 `anima_chatter` 插件的实时语音通话功能，**必须**搭配使用本仓库（`tt-P607/asr_adapter_anima`）作为适配器。原作者拾风的 ASR 适配器缺少 `asr_redirect` 服务和按需启停等关键重定向接口，两者无法兼容。
 
+## 部署与安装
+
+要完整搭建言柒版 `anima_chatter` 双向实时语音通话环境，请在 `plugins/` 目录下克隆全套配套插件：
+
+```bash
+# 1. 克隆语音/VTS 主聊天插件 (Anima Chatter)
+git clone https://github.com/tt-P607/anima_chatter.git
+
+# 2. 克隆本实时语音识别适配器 (ASR Adapter Anima)
+git clone https://github.com/tt-P607/asr_adapter_anima.git
+
+# 3. 克隆配套 FunASR 识别后端 (FunASR Provider Anima)
+git clone https://github.com/tt-P607/funasr_asr_provider_anima.git
+```
+
 ## 概述
 
 `asr_adapter_anima` 是本机麦克风实时语音识别适配器。
