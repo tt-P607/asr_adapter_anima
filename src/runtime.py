@@ -23,7 +23,7 @@ from ..protocol import ASRAudioSource, ASRProvider, ASRRecognizer
 from ..service import ASRProviderRegistryService
 from .text_quality import is_likely_normal_utterance
 
-logger = get_logger("asr_adapter")
+logger = get_logger("asr_adapter_anima")
 
 
 # ── ASR 转发目标 ────────────────────────────────────────────
@@ -318,7 +318,7 @@ class AsrAdapterRuntimeMixin:
     def _resolve_provider(self, config: AsrAdapterConfig) -> ASRProvider:
         """从 registry 中解析当前 adapter 使用的 provider。"""
 
-        registry_service = get_service("asr_adapter:service:asr_provider_registry")
+        registry_service = get_service("asr_adapter_anima:service:asr_provider_registry")
         if registry_service is None or not hasattr(registry_service, "get_provider"):
             raise RuntimeError("无法获取 asr_adapter provider registry service")
         registry = cast(ASRProviderRegistryService, registry_service)

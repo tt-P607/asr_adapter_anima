@@ -89,7 +89,7 @@ class ASRRedirectService(BaseService):
     )
     version = "1.1.0"
 
-    _ADAPTER_SIGNATURE = "asr_adapter:adapter:asr_adapter"
+    _ADAPTER_SIGNATURE = "asr_adapter_anima:adapter:asr_adapter_anima"
 
     def set_target(
         self,

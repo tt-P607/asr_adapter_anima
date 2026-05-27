@@ -18,7 +18,7 @@ from .src.runtime import AsrAdapterRuntimeMixin
 class AsrAdapter(AsrAdapterRuntimeMixin, BaseAdapter):
     """ASR 适配器。"""
 
-    adapter_name = "asr_adapter"
+    adapter_name = "asr_adapter_anima"
     adapter_version = "1.0.0"
     adapter_description = "基于本机麦克风实时语音识别适配器"
     platform = "local_asr"
@@ -40,9 +40,9 @@ class AsrAdapter(AsrAdapterRuntimeMixin, BaseAdapter):
 class AsrAdapterPlugin(BasePlugin):
     """可插拔 ASR 适配器插件。"""
 
-    plugin_name = "asr_adapter"
+    plugin_name = "asr_adapter_anima"
     plugin_version = "1.0.0"
-    plugin_author = "MoFox Team"
+    plugin_author = "言柒 & 拾风"
     plugin_description = "本机麦克风实时语音识别适配器"
     configs = [AsrAdapterConfig]
 
