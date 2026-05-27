@@ -11,7 +11,7 @@ from src.core.components.loader import register_plugin
 from src.kernel.concurrency import get_task_manager
 
 from .config import AsrAdapterConfig
-from .service import ASRProviderRegistryService
+from .service import ASRProviderRegistryService, ASRRedirectService
 from .src.runtime import AsrAdapterRuntimeMixin
 
 
@@ -49,4 +49,4 @@ class AsrAdapterPlugin(BasePlugin):
     def get_components(self) -> list[type]:
         """返回插件包含的组件类。"""
 
-        return [ASRProviderRegistryService, AsrAdapter]
+        return [ASRProviderRegistryService, ASRRedirectService, AsrAdapter]

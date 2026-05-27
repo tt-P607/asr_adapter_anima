@@ -1,9 +1,9 @@
 {
     "name": "asr_adapter",
-    "display_name": "实时语音识别适配器",
-    "version": "1.0.2",
-    "description": "本机麦克风实时语音识别适配器，通过 registry 消费外部 ASR provider",
-    "author": "MoFox Team",
+    "display_name": "实时语音识别适配器 (tt-P607 Fork)",
+    "version": "1.1.0",
+    "description": "本机麦克风实时语音识别适配器，通过 registry 消费外部 ASR provider，支持与 anima_chatter 联动实现实时语音通话。",
+    "author": "言柒 & 拾风",
     "categories": ["chat"],
     "tags": ["asr", "adapter", "real-time", "speech recognition"],
     "dependencies": {
@@ -14,6 +14,11 @@
         {
             "component_type": "service",
             "component_name": "asr_provider_registry",
+            "dependencies": []
+        },
+        {
+            "component_type": "service",
+            "component_name": "asr_redirect",
             "dependencies": []
         },
         {

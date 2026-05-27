@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import deque
+from dataclasses import dataclass
 import io
 from pathlib import Path
 import time
@@ -23,6 +24,135 @@ from ..service import ASRProviderRegistryService
 from .text_quality import is_likely_normal_utterance
 
 logger = get_logger("asr_adapter")
+
+
+# ── ASR 转发目标 ────────────────────────────────────────────
+# 默认情况下，ASR 识别出的文本封装成 envelope 发给 ``local_asr`` 平台
+# （由 anima_chatter 的 voice 模式接管）。
+#
+# 但当 anima_chatter 启动语音通话功能时，ASR 文本要被转发到**发起通话的
+# 那个 stream**（例如某个 QQ 私聊）。这里提供模块级 redirect 接口让
+# anima_chatter 的 voice_call action 可以临时改写转发目标，通话结束后
+# 再清掉。
+#
+# 设计：
+# - 模块级状态 + 简单 setter / getter，不引入 Service（Service 不是单例
+#   且本来 ASR 相关进程内只有一个 adapter 实例，模块级最直接）。
+# - 写路径不加锁——只在 start_voice_call / end_voice_call 两个 action
+#   中调用，那里已经被 :mod:`plugins.anima_chatter.call_state` 的 lock
+#   串行化了，再加一层锁是重复保护。
+# - 读路径在每次 ASR 识别后构造 envelope 时调一次，性能开销可忽略。
+
+
+@dataclass
+class RedirectTarget:
+    """ASR 文本应注入到的目标 stream 完整信息。
+
+    包含 platform / stream_id / user_id / user_name 四个字段——为什么需要这么多：
+    - ``platform`` + ``stream_id``：决定 envelope 路由到哪条流；
+    - ``user_id``：envelope 的 ``user_info.user_id`` 必须是**通话发起方在该
+      平台上的真实 ID**（如 QQ 号），不能用 ASR 的 ``speaker_id``——后者会被
+      下游误认为是新用户，触发"创建新用户 + 创建新 stream"，路由就不对了；
+    - ``user_name``：让消息历史显示通话发起方的名字而不是 ``"Local Microphone"``。
+
+    群聊通话场景预留 ``group_id``（当前私聊语义下为空字符串）。
+    """
+
+    platform: str
+    stream_id: str
+    user_id: str
+    user_name: str
+    group_id: str = ""
+
+
+_redirect_target: RedirectTarget | None = None
+
+
+def set_redirect_target(
+    platform: str,
+    stream_id: str,
+    *,
+    user_id: str,
+    user_name: str = "",
+    group_id: str = "",
+) -> None:
+    """临时把 ASR 文本转发到另一个平台/stream。
+
+    用于 anima_chatter 的 voice_call 功能：通话开始时把 ASR 转发到 QQ
+    stream，通话结束时调 :func:`clear_redirect_target` 清掉。
+
+    Args:
+        platform: 转发目标平台名（如 ``"qq"``）。
+        stream_id: 转发目标的 stream_id（一定要是已经存在的流的 ID，不是
+            待创建的，否则核心会根据 envelope 的 platform+user_id 算出
+            的 ID 与本参数不一致）。
+        user_id: 通话发起方在目标平台上的真实 ID（如 QQ 号），envelope 的
+            ``user_info.user_id`` 会用这个值——保证下游路由认为消息来自
+            通话发起方而不是 ASR 适配器自己的 speaker_id。**不可为空**。
+        user_name: 通话发起方在目标平台上的昵称。可为空，留空时使用 ``"语音通话"``。
+        group_id: 群聊通话预留字段；私聊通话留空。
+    """
+
+    global _redirect_target
+    if not platform or not stream_id:
+        raise ValueError("platform 和 stream_id 都不能为空")
+    if not user_id:
+        raise ValueError("redirect 必须带 user_id（通话发起方真实 ID），否则下游路由会出错")
+    _redirect_target = RedirectTarget(
+        platform=platform,
+        stream_id=stream_id,
+        user_id=user_id,
+        user_name=user_name or "语音通话",
+        group_id=group_id,
+    )
+    logger.info(
+        f"ASR 文本转发已开启：→ platform={platform} stream={stream_id[:8]}... "
+        f"user_id={user_id} user_name={user_name!r}"
+    )
+
+
+def clear_redirect_target() -> None:
+    """清除转发目标，恢复默认（发到 ``local_asr`` 平台）。"""
+
+    global _redirect_target
+    if _redirect_target is not None:
+        logger.info(
+            f"ASR 文本转发已关闭：原目标 platform={_redirect_target.platform} "
+            f"stream={_redirect_target.stream_id[:8]}..."
+        )
+    _redirect_target = None
+
+
+def get_redirect_target() -> RedirectTarget | None:
+    """返回当前 redirect 目标完整对象（None 表示未启用 redirect）。"""
+
+    return _redirect_target
+
+
+# 通话场景下临时覆写的激活模式——通话期间用户在打电话，不应该再要求按
+# ``ctrl+space``。覆写为 ``always_on`` 让麦克风全程开放收音；通话结束后
+# 还原原模式。anima_chatter 的 voice_call action 通过 ASRRedirectService
+# 接口设置 / 清除。
+_activation_override: str | None = None
+
+
+def set_activation_override(mode: str | None) -> None:
+    """临时覆写 activation.mode；为 ``None`` 时清除覆写。"""
+
+    global _activation_override
+    if mode is not None and mode not in {"vad", "push_to_talk", "toggle_key", "always_on"}:
+        raise ValueError(f"非法 activation override: {mode}")
+    _activation_override = mode
+    if mode is None:
+        logger.info("ASR 激活模式覆写已清除")
+    else:
+        logger.info(f"ASR 激活模式临时覆写为: {mode}")
+
+
+def get_activation_override() -> str | None:
+    """返回当前覆写的激活模式（None 表示未覆写）。"""
+
+    return _activation_override
 
 
 class AsrAdapterRuntimeMixin:
@@ -59,16 +189,43 @@ class AsrAdapterRuntimeMixin:
         return plugin_module.get_task_manager()
 
     async def on_adapter_loaded(self) -> None:
-        """启动麦克风采集和流式识别后台任务。"""
+        """启动麦克风采集和流式识别后台任务。
+
+        仅在 plugin.enabled=True 时常驻；否则保持空闲，等待 anima_chatter
+        通过 :meth:`ensure_runtime_started` 按需启动（语音通话场景）。
+        """
 
         if not self.plugin or not self.plugin.config:
             raise RuntimeError("ASR 适配器启动失败：缺少插件配置")
 
         config = cast(AsrAdapterConfig, self.plugin.config)
         if not config.plugin.enabled:
-            logger.info("ASR 适配器配置为禁用，跳过启动")
+            logger.info("ASR 适配器配置为禁用，将仅在被显式调用时启动 runtime（语音通话场景）")
             return
 
+        await self._start_runtime()
+
+    async def on_adapter_unloaded(self) -> None:
+        """停止后台识别任务并释放音频资源。"""
+
+        await self._stop_runtime()
+
+    async def _start_runtime(self) -> None:
+        """真正启动麦克风采集和识别循环（与 ``enabled`` 配置无关）。
+
+        分离出来是为了让 anima_chatter 在用户配置 ``enabled=false`` 时也能
+        在通话开始时按需启动 ASR——配置只影响"是否常驻"。
+        幂等：已经在跑就直接返回。
+        """
+
+        if self._recognition_running:
+            logger.debug("ASR runtime 已在运行，跳过 _start_runtime")
+            return
+
+        if not self.plugin or not self.plugin.config:
+            raise RuntimeError("ASR runtime 启动失败：缺少插件配置")
+
+        config = cast(AsrAdapterConfig, self.plugin.config)
         self._prepare_activation(config)
         logger.info(
             "ASR 监听激活方式: "
@@ -87,10 +244,13 @@ class AsrAdapterRuntimeMixin:
             name="asr_loop",
             daemon=True,
         )
-        logger.info("ASR 适配器已启动")
+        logger.info("ASR runtime 已启动")
 
-    async def on_adapter_unloaded(self) -> None:
-        """停止后台识别任务并释放音频资源。"""
+    async def _stop_runtime(self) -> None:
+        """停止识别循环并释放音频资源。幂等。"""
+
+        if not self._recognition_running and self._audio_source is None:
+            return
 
         self._recognition_running = False
         if self._recognition_task_info:
@@ -99,7 +259,10 @@ class AsrAdapterRuntimeMixin:
             self._recognition_task_info = None
 
         if self._audio_source is not None:
-            await self._audio_source.stop()
+            try:
+                await self._audio_source.stop()
+            except Exception as exc:
+                logger.warning(f"停止音频源失败: {exc}")
             self._audio_source = None
 
         self._recognizer = None
@@ -112,7 +275,38 @@ class AsrAdapterRuntimeMixin:
         self._playback_until = 0.0
         self._preroll_chunks.clear()
         self._provider = None
-        logger.info("ASR 适配器已关闭")
+        logger.info("ASR runtime 已停止")
+
+    async def ensure_runtime_started(self) -> bool:
+        """按需启动 ASR runtime（即便 plugin.enabled=false）。
+
+        供 :class:`ASRRedirectService` 在通话开始时调用。
+        Returns:
+            bool: True 表示当前 runtime 已在运行（要么本次启动了，要么已经
+                在跑）；False 表示启动失败。
+        """
+
+        if self._recognition_running:
+            return True
+        try:
+            await self._start_runtime()
+            return self._recognition_running
+        except Exception as exc:
+            logger.error(f"按需启动 ASR runtime 失败: {exc}", exc_info=True)
+            return False
+
+    async def stop_runtime_if_dynamic(self) -> None:
+        """如果 ASR runtime 是被 anima_chatter 临时启动的（plugin.enabled=false），
+        通话结束时停止它；否则保持运行（用户原本就要 ASR 常驻）。
+        """
+
+        if not self.plugin or not self.plugin.config:
+            return
+        config = cast(AsrAdapterConfig, self.plugin.config)
+        if config.plugin.enabled:
+            logger.debug("plugin.enabled=true，保持 ASR runtime 常驻，跳过 stop")
+            return
+        await self._stop_runtime()
 
     @staticmethod
     def _provider_name(config: AsrAdapterConfig) -> str | None:
@@ -454,9 +648,13 @@ class AsrAdapterRuntimeMixin:
 
     @staticmethod
     def _activation_mode(config: AsrAdapterConfig) -> str:
-        """返回规范化的监听激活模式。"""
+        """返回规范化的监听激活模式（含 anima_chatter 覆写）。"""
 
-        mode = str(config.activation.mode or "vad").strip().lower()
+        # anima_chatter 通话进行中可能临时把激活模式覆写为 always_on，
+        # 让通话期间不要求用户按按键。覆写优先级最高，未覆写时按 config 走。
+        override = get_activation_override()
+        raw = override if override is not None else str(config.activation.mode or "vad")
+        mode = raw.strip().lower()
         aliases = {
             "ptt": "push_to_talk",
             "push-to-talk": "push_to_talk",
@@ -708,7 +906,12 @@ class AsrAdapterRuntimeMixin:
         return max_run >= 6 and max_run * 2 >= len(content) and len(set(content)) <= 3
 
     async def _send_text_to_core(self, text: str, *, is_final: bool) -> None:
-        """将识别文本封装为标准 incoming 文本消息并发送到核心。"""
+        """将识别文本封装为标准 incoming 文本消息并发送到核心。
+
+        默认走 ``self.platform`` （= ``local_asr``）；如果模块级 redirect 已开启
+        （anima_chatter 通话场景），envelope 的 ``platform`` 与 ``stream_id``
+        会被改写到目标 stream，让 ASR 文本注入到那条流的 unread_messages。
+        """
 
         text = text.strip()
         if not text or not self.core_sink:
@@ -717,22 +920,52 @@ class AsrAdapterRuntimeMixin:
             return
 
         config = cast(AsrAdapterConfig, self.plugin.config)
-        envelope = {
+        target = get_redirect_target()
+
+        if target is None:
+            # 默认路径：ASR 文本入 local_asr 平台的默认 stream，无 stream_id
+            # 强制指定，让核心按 platform + user_id 自动 get_or_create。
+            target_platform = self.platform
+            user_id = config.bot.speaker_id
+            user_nickname = config.bot.speaker_name
+            target_stream_id: str | None = None
+            extra_user: dict[str, str] = {}
+        else:
+            # 通话路径：用通话发起方在目标平台上的真实身份发消息——envelope 的
+            # user_id / user_nickname 必须是发起方在目标平台的 ID（如 QQ 号），
+            # 不能再用 ASR 适配器自己的 speaker_id（"local_microphone"），
+            # 否则下游会把它当成新用户：
+            # 1. UserQuery 创建一个名为 "Local Microphone" 的新用户；
+            # 2. StreamMgr 用 (qq, local_microphone) 算出新的 stream_id
+            #    （不是通话发起方的 stream_id）；
+            # 3. napcat 拿 "local_microphone" 字符串去 int(...) 当 QQ 号，崩溃。
+            target_platform = target.platform
+            user_id = target.user_id
+            user_nickname = target.user_name
+            target_stream_id = target.stream_id
+            extra_user = {}
+            if target.group_id:
+                extra_user["group_id"] = target.group_id
+
+        envelope: dict[str, Any] = {
             "direction": "incoming",
             "message_info": {
-                "platform": self.platform,
+                "platform": target_platform,
                 "message_id": f"asr-{uuid.uuid4()}",
                 "message_type": "private",
                 "time": time.time(),
                 "user_info": {
-                    "platform": self.platform,
-                    "user_id": config.bot.speaker_id,
-                    "user_nickname": config.bot.speaker_name,
+                    # user_info.platform 跟随 target——保证消息归属与 stream 一致
+                    "platform": target_platform,
+                    "user_id": user_id,
+                    "user_nickname": user_nickname,
+                    **extra_user,
                 },
                 "extra": {
                     "asr": {
                         "engine": "funasr",
                         "is_final": is_final,
+                        "redirected": target_stream_id is not None,
                     }
                 },
             },
@@ -744,6 +977,10 @@ class AsrAdapterRuntimeMixin:
                 "is_final": is_final,
             },
         }
+        # 重定向时显式指定 stream_id，让核心直接路由到目标流；不重定向时
+        # 留空让核心按 platform + user_id 自动 get_or_create local_asr stream。
+        if target_stream_id is not None:
+            envelope["message_info"]["stream_id"] = target_stream_id
         await self.core_sink.send(cast(MessageEnvelope, envelope))
 
 

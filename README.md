@@ -1,4 +1,7 @@
-# asr_adapter
+# asr_adapter (言柒 Fork 版)
+
+> [!IMPORTANT]
+> **关键依赖声明**：本插件是言柒针对 `tt-P607/anima_chatter` 定制的专用版本。如果您要使用言柒版本的 `anima_chatter` 插件的实时语音通话功能，**必须**搭配使用本仓库（`tt-P607/asr_adapter`）作为适配器。原作者拾风的 ASR 适配器缺少 `asr_redirect` 服务和按需启停等关键重定向接口，两者无法兼容。
 
 ## 概述
 
@@ -10,17 +13,25 @@
 
 - `asr_adapter` 负责采集麦克风、激活逻辑、识别结果注入核心、播放核心回传语音
 - `funasr_asr_provider` 负责提供 `funasr` 识别后端
-- `voice_chatter` 负责把语音输入接进对话流程
+- `anima_chatter` 负责把语音输入接进对话流程（包含双向语音通话逻辑）
 
 ## 提供的组件
 
 - `asr_adapter:service:asr_provider_registry`
+- `asr_adapter:service:asr_redirect`
 - `asr_adapter:adapter:asr_adapter`
 
 其中：
 
-- registry service 用于给外部 ASR provider 插件注册识别后端
-- adapter 负责本地音频采集、识别循环、文本提交和 TTS 回放
+- `asr_provider_registry` 用于给外部 ASR provider 插件注册识别后端。
+- `asr_redirect` 供 `anima_chatter` 等需要实时通话的插件调用，用于动态转发 ASR 文本流到特定的平台与 StreamID，并在通话开始和结束时按需启停 ASR 运行时（无需常驻）。
+- `asr_adapter` 负责本地音频采集、识别循环、文本提交和 TTS 回放。
+
+## 与 `anima_chatter` 联动说明
+
+本插件与 `anima_chatter` 紧密配合：
+1. **自动按需启停**：在 `config.toml` 中，即使将 `plugin.enabled` 设置为 `false`（不让 ASR 适配器一直占用麦克风并常驻后台），当在 `anima_chatter` 中开启语音通话时，`anima_chatter` 仍会通过 `asr_redirect` 服务强行启动 ASR 服务，并在通话挂断时自动停用并释放麦克风。
+2. **文本动态路由**：通话状态下，本插件会自动劫持 ASR 输出，以呼叫方的账号身份将文字定向发送至触发通话的 Stream，避免消息错乱。
 
 ## 依赖
 
@@ -65,4 +76,4 @@
 ## 相关插件
 
 - `plugins/funasr_asr_provider`
-- `plugins/voice_chatter`
+- `plugins/anima_chatter`
