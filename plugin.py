@@ -6,9 +6,7 @@ from typing import Any
 
 from mofox_wire import CoreSink
 
-from src.core.components.base import BaseAdapter, BasePlugin
-from src.core.components.loader import register_plugin
-from src.kernel.concurrency import get_task_manager
+from src.app.plugin_system.base import BaseAdapter, BasePlugin, register_plugin
 
 from .config import AsrAdapterConfig
 from .service import ASRProviderRegistryService, ASRRedirectService
@@ -18,9 +16,8 @@ from .src.runtime import AsrAdapterRuntimeMixin
 class AsrAdapter(AsrAdapterRuntimeMixin, BaseAdapter):
     """ASR 适配器。"""
 
-    adapter_name = "asr_adapter_anima"
-    adapter_version = "1.0.0"
-    adapter_description = "基于本机麦克风实时语音识别适配器"
+    name = "asr_adapter_anima"
+    description = "采集本机麦克风并通过可插拔 Provider 提交实时语音识别结果"
     platform = "local_asr"
 
     run_in_subprocess = False
@@ -38,12 +35,9 @@ class AsrAdapter(AsrAdapterRuntimeMixin, BaseAdapter):
 
 @register_plugin
 class AsrAdapterPlugin(BasePlugin):
-    """可插拔 ASR 适配器插件。"""
+    """装配 ASR Provider Registry、通话重定向服务和麦克风适配器。"""
 
     plugin_name = "asr_adapter_anima"
-    plugin_version = "1.0.0"
-    plugin_author = "言柒 & 拾风"
-    plugin_description = "本机麦克风实时语音识别适配器"
     configs = [AsrAdapterConfig]
 
     def get_components(self) -> list[type]:

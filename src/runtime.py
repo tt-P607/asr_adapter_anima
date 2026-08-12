@@ -17,6 +17,7 @@ from mofox_wire import MessageEnvelope
 
 from src.app.plugin_system.api.log_api import get_logger
 from src.app.plugin_system.api.service_api import get_service
+from src.kernel.concurrency import get_task_manager
 
 from ..config import AsrAdapterConfig
 from ..protocol import ASRAudioSource, ASRProvider, ASRRecognizer
@@ -182,11 +183,9 @@ class AsrAdapterRuntimeMixin:
 
     @staticmethod
     def _get_task_manager() -> Any:
-        """通过 plugin 模块暴露的 seam 获取 task manager。"""
+        """返回框架任务管理器。"""
 
-        from .. import plugin as plugin_module
-
-        return plugin_module.get_task_manager()
+        return get_task_manager()
 
     async def on_adapter_loaded(self) -> None:
         """启动麦克风采集和流式识别后台任务。
@@ -211,7 +210,7 @@ class AsrAdapterRuntimeMixin:
         await self._stop_runtime()
 
     async def _start_runtime(self) -> None:
-        """真正启动麦克风采集和识别循环（与 ``enabled`` 配置无关）。
+        """启动麦克风采集和识别循环，并在失败时回滚已创建资源。
 
         分离出来是为了让 anima_chatter 在用户配置 ``enabled=false`` 时也能
         在通话开始时按需启动 ASR——配置只影响"是否常驻"。
@@ -231,19 +230,33 @@ class AsrAdapterRuntimeMixin:
             "ASR 监听激活方式: "
             f"mode={self._activation_mode(config)}, hotkey={config.activation.hotkey}"
         )
-        self._provider = self._resolve_provider(config)
-        self._provider.validate_config(config)
-        self._recognizer = self._provider.create_recognizer(config)
-        self._audio_source = self._provider.create_audio_source(config)
-        await self._audio_source.start()
+        try:
+            self._provider = self._resolve_provider(config)
+            self._provider.validate_config(config)
+            self._recognizer = self._provider.create_recognizer(config)
+            self._audio_source = self._provider.create_audio_source(config)
+            await self._audio_source.start()
 
-        self._recognition_running = True
-        tm = self._get_task_manager()
-        self._recognition_task_info = tm.create_task(
-            self._recognition_loop(),
-            name="asr_loop",
-            daemon=True,
-        )
+            self._recognition_running = True
+            tm = self._get_task_manager()
+            self._recognition_task_info = tm.create_task(
+                self._recognition_loop(),
+                name="asr_adapter_anima.recognition_loop",
+                daemon=True,
+                metadata={"plugin": "asr_adapter_anima", "kind": "recognition"},
+            )
+        except Exception:
+            self._recognition_running = False
+            if self._audio_source is not None:
+                try:
+                    await self._audio_source.stop()
+                except Exception as cleanup_error:  # noqa: BLE001
+                    logger.warning(f"ASR 启动回滚时停止音频源失败: {cleanup_error}")
+            self._audio_source = None
+            self._recognizer = None
+            self._provider = None
+            self._recognition_task_info = None
+            raise
         logger.info("ASR runtime 已启动")
 
     async def _stop_runtime(self) -> None:
@@ -835,8 +848,7 @@ class AsrAdapterRuntimeMixin:
                     )
                     return
                 if (
-                    config.message.min_token_confidence > 0
-                    and token_confidences
+                    token_confidences
                     and min(token_confidences) < config.message.min_token_confidence
                 ):
                     logger.debug(

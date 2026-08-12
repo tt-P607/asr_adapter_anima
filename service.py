@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.app.plugin_system.api.log_api import get_logger
-from src.core.components.base.service import BaseService
+from src.app.plugin_system.base import BaseService
 
 from .protocol import ASRProvider
 
@@ -20,20 +20,24 @@ _DEFAULT_PROVIDER: str | None = None
 class ASRProviderRegistryService(BaseService):
     """供社区插件注册 ASR provider 的服务。"""
 
-    service_name = "asr_provider_registry"
-    service_description = "ASR provider registry"
-    version = "1.0.0"
+    name = "asr_provider_registry"
+    description = "ASR provider registry"
 
     def register_provider(self, provider: ASRProvider, *, default: bool = False) -> None:
-        """注册一个 ASR provider。"""
+        """注册 Provider；同名注册以新实例替换旧实例。"""
 
         global _DEFAULT_PROVIDER
         provider_name = str(getattr(provider, "provider_name", "") or "").strip()
         if not provider_name:
             raise ValueError("ASR provider 必须声明 provider_name")
+        replaced = provider_name in _PROVIDERS
         _PROVIDERS[provider_name] = provider
         if default or _DEFAULT_PROVIDER is None:
             _DEFAULT_PROVIDER = provider_name
+        logger.info(
+            f"ASR Provider {'已替换' if replaced else '已注册'}: "
+            f"name={provider_name}, default={_DEFAULT_PROVIDER == provider_name}"
+        )
 
     def unregister_provider(self, provider_name: str) -> bool:
         """注销 provider。"""
@@ -53,7 +57,7 @@ class ASRProviderRegistryService(BaseService):
         return _PROVIDERS.get(name)
 
     def list_providers(self) -> dict[str, Any]:
-        """列出 provider 注册状态。"""
+        """列出 Provider 名称与默认项。"""
 
         return {
             "default_provider": _DEFAULT_PROVIDER,
@@ -82,12 +86,11 @@ class ASRRedirectService(BaseService):
       ``adapter_api.get_adapter`` 找到 adapter 实例。
     """
 
-    service_name = "asr_redirect"
-    service_description = (
+    name = "asr_redirect"
+    description = (
         "ASR 文本转发 + 按需启停 ASR runtime：让其他插件临时把识别文本路由到非默认 stream，"
         "并在 ASR 适配器未常驻时按需启动 / 停止麦克风采集。"
     )
-    version = "1.1.0"
 
     _ADAPTER_SIGNATURE = "asr_adapter_anima:adapter:asr_adapter_anima"
 
@@ -136,9 +139,9 @@ class ASRRedirectService(BaseService):
     def is_redirected(self) -> bool:
         """返回当前是否处于转发状态。"""
 
-        from .src import runtime as _runtime
+        from .src.runtime import get_redirect_target
 
-        return _runtime._redirect_target is not None  # noqa: SLF001 — 受控读
+        return get_redirect_target() is not None
 
     def _get_adapter(self) -> Any:
         """通过 adapter_api 拿到 asr_adapter 实例。"""

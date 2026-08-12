@@ -88,6 +88,25 @@ git clone https://github.com/tt-P607/funasr_asr_provider_anima.git
 
 如果你要接入新的 ASR 后端，推荐做法不是修改本插件，而是新建独立 provider 插件，并在加载时通过 `asr_adapter_anima:service:asr_provider_registry` 注册。
 
+## 故障排查
+
+- 启动提示没有可用 Provider：确认 FunASR 或其他 Provider 已加载，并检查 `asr.provider` 名称是否与注册名称一致。
+- 麦克风无法打开：检查输入设备名称/索引、系统权限和采样率；设备留空时使用系统默认输入设备。
+- 通话能开始但文本进入错误会话：检查调用方传入的目标平台、Stream ID 和真实用户 ID；redirect 会拒绝空用户 ID。
+- 识别结果被丢弃：依次检查最短文本、平均置信度、单 token 置信度、明显噪声和文本质量过滤日志。
+- 挂断后麦克风仍被占用：仅动态启动且 `plugin.enabled=false` 的 runtime 会在通话结束时停止；常驻模式会保持运行。
+
+## 验证
+
+自动测试位于 `plugins/asr_adapter_anima/test/`：
+
+```bash
+uv run pytest plugins/asr_adapter_anima/test -q --no-cov
+uv run ruff check plugins/asr_adapter_anima
+```
+
+实机验证至少覆盖：Provider 注册、麦克风采集、最终文本注入、通话 redirect、TTS 回放，以及启动失败/挂断后的设备释放。
+
 ## 相关插件
 
 - `plugins/funasr_asr_provider_anima`
